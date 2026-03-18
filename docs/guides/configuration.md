@@ -25,11 +25,9 @@ cp .env.example .env
 
 ## Embeddings
 
-Cerefox uses cloud-based embedding APIs. Local models (mpnet, Ollama) are not supported — they require large downloads, fail on some hardware, and add installation complexity.
-
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `CEREFOX_EMBEDDER` | `openai` | Embedding provider. Valid values: `openai`, `fireworks` |
+| `CEREFOX_EMBEDDER` | `openai` | Embedding provider. Valid values: `openai`, `fireworks`, `ollama` |
 
 ### OpenAI (default, recommended)
 
@@ -56,6 +54,22 @@ CEREFOX_EMBEDDER=fireworks
 CEREFOX_FIREWORKS_API_KEY=fw_...
 ```
 
+### Ollama (fully local, no API key)
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `CEREFOX_OLLAMA_BASE_URL` | `http://localhost:11434` | Ollama server URL. |
+| `CEREFOX_OLLAMA_EMBEDDING_MODEL` | `nomic-embed-text` | Ollama embedding model. Must output 768-dim vectors to match the DB schema. |
+
+To use Ollama:
+```env
+CEREFOX_EMBEDDER=ollama
+# No API key needed — just have Ollama running with the model pulled:
+# ollama pull nomic-embed-text
+```
+
+**Recommended model:** `nomic-embed-text` — 768 dimensions (matches schema), 8192 token context, 274 MB download. Same model family as the Fireworks path.
+
 ### Edge Functions (for agents)
 
 The `cerefox-search` and `cerefox-ingest` Supabase Edge Functions handle embeddings server-side -- agents don't need to set up any embedder locally. The Edge Functions read `OPENAI_API_KEY` from the Supabase project's secrets. See `docs/guides/connect-agents.md`.
@@ -70,6 +84,32 @@ All embedding API calls (Python `CloudEmbedder` and Edge Functions) include auto
 - **Logged**: every retry attempt is logged with the failure reason and attempt number
 
 This handles intermittent OpenAI API errors (500s) that would otherwise cause search or ingestion failures. The retry logic is consistent across both the Python path (local MCP, web UI, CLI) and the Edge Function path (remote MCP, GPT Actions).
+
+---
+
+## API / External Agent Access
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `CEREFOX_API_TOKEN` | `""` | Optional bearer token for `/api/*` JSON endpoints and MCP HTTP transport. If empty, no auth is required (suitable for localhost-only use). If set, all requests must include `Authorization: Bearer <token>`. |
+| `CEREFOX_MCP_HTTP_PORT` | `8001` | Port for the MCP Streamable HTTP transport (`cerefox mcp --transport http`). |
+
+### JSON REST API
+
+The FastAPI app serves JSON endpoints alongside the web UI on port 8000:
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/search` | POST | Search the knowledge base (same as cerefox-search Edge Function) |
+| `/api/ingest` | POST | Ingest a document (same as cerefox-ingest Edge Function) |
+| `/api/metadata` | POST | List metadata keys (same as cerefox-metadata Edge Function) |
+
+### MCP HTTP Transport
+
+Run the MCP server with HTTP transport for remote agent access:
+```bash
+cerefox mcp --transport http --port 8001
+```
 
 ---
 
@@ -243,15 +283,32 @@ CEREFOX_EMBEDDER=fireworks
 CEREFOX_FIREWORKS_API_KEY=fw_...
 ```
 
+## Example: Fully Local `.env` (Ollama + Docker Postgres)
+
+```bash
+# Local Postgres (Docker)
+CEREFOX_DATABASE_URL=postgresql://cerefox:cerefox@localhost:5432/cerefox
+
+# No Supabase needed
+CEREFOX_SUPABASE_URL=
+CEREFOX_SUPABASE_KEY=
+
+# Local Ollama (no API key)
+CEREFOX_EMBEDDER=ollama
+
+# Optional: protect API endpoints if exposing to network
+# CEREFOX_API_TOKEN=my-secret-token
+```
+
 ---
 
 ## Changing the embedding model
 
-Cerefox has **two independent access paths**, each with its own embedding configuration:
+Cerefox has **multiple access paths**, each with its own embedding configuration:
 
 | Path | Where embedding happens | Config location |
 |------|------------------------|-----------------|
-| Local MCP server + CLI | Python `CloudEmbedder` | `.env` (`CEREFOX_OPENAI_EMBEDDING_MODEL`, etc.) |
+| Local (CLI, web UI, MCP, JSON API) | Python embedder (Cloud or Ollama) | `.env` (`CEREFOX_EMBEDDER`, model settings) |
 | Edge Functions (GPT Actions, curl) | TypeScript constants in Edge Function code | Hardcoded in `supabase/functions/*/index.ts` |
 
 When you change the embedding model, **both paths must be updated and kept in sync** — they must use the same model and dimensions, or search results will be incoherent (queries embedded by one model won't match chunks embedded by another).
