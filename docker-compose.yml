@@ -47,9 +47,17 @@ services:
       # Direct Postgres URL — used by db_deploy.py.
       CEREFOX_DATABASE_URL: postgresql://cerefox:cerefox@postgres:5432/cerefox
 
-      # Embedding model (cloud API, requires OPENAI_API_KEY).
+      # Embedding model. Set CEREFOX_EMBEDDER to "ollama" for local embeddings.
       CEREFOX_EMBEDDER: ${CEREFOX_EMBEDDER:-openai}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+
+      # Ollama settings (only needed when CEREFOX_EMBEDDER=ollama).
+      # Use "host.docker.internal" to reach Ollama running on the host.
+      CEREFOX_OLLAMA_BASE_URL: ${CEREFOX_OLLAMA_BASE_URL:-http://host.docker.internal:11434}
+      CEREFOX_OLLAMA_EMBEDDING_MODEL: ${CEREFOX_OLLAMA_EMBEDDING_MODEL:-nomic-embed-text}
+
+      # API token for /api/* and MCP HTTP endpoints (optional).
+      CEREFOX_API_TOKEN: ${CEREFOX_API_TOKEN:-}
 
       # Chunking and retrieval settings.
       CEREFOX_MAX_CHUNK_CHARS: ${CEREFOX_MAX_CHUNK_CHARS:-4000}

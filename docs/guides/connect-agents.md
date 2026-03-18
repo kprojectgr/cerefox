@@ -27,11 +27,12 @@ client; you can also run both in parallel.
 | Claude Code (remote) | Path A-Remote — `cerefox-mcp` Edge Function | Hybrid | URL + anon key only; no local install |
 | Cursor (remote) | Path A-Remote — `cerefox-mcp` Edge Function | Hybrid | URL + anon key only; no local install |
 | ChatGPT (chatgpt.com or desktop) | Path B — Custom GPT → Edge Functions | Hybrid | ChatGPT Plus required |
-| Claude Desktop (local) | Path A-Local — `cerefox mcp` | Hybrid | Legacy fallback; Python + uv + local clone |
-| Claude Code (local) | Path A-Local — `cerefox mcp` | Hybrid | Legacy fallback; Python + uv + local clone |
-| Cursor (local) | Path A-Local — `cerefox mcp` | Hybrid | Legacy fallback; Python + uv + local clone |
+| Claude Desktop (local stdio) | Path A-Local — `cerefox mcp` | Hybrid | Python + uv + local clone |
+| Claude Code (local HTTP) | Path A-Local-HTTP — `cerefox mcp --transport http` | Hybrid | Python + uv; network accessible |
+| Cursor (local HTTP) | Path A-Local-HTTP — `cerefox mcp --transport http` | Hybrid | Python + uv; network accessible |
+| curl / scripts (local) | JSON REST API — `/api/search`, `/api/ingest` | Hybrid | Web app running on port 8000 |
 | Cloud Claude (claude.ai web) | Remote Supabase MCP | FTS only | No install; search quality limited |
-| curl / scripts | Path B — Edge Functions directly | Hybrid | Direct HTTP; no client needed |
+| curl / scripts (remote) | Path B — Edge Functions directly | Hybrid | Direct HTTP; no client needed |
 | Custom Python agents | Python SDK directly | Hybrid | Local Python required |
 
 > **"Hybrid"** = FTS + semantic, document-level (complete reconstructed notes, not isolated chunks).
@@ -359,6 +360,122 @@ Replace `<your-project-ref>` and `<your-anon-key>` with your actual values.
 
 ---
 
+## Path A-Local-HTTP — Local MCP over HTTP (`cerefox mcp --transport http`)
+
+### What it is
+
+The same local MCP server as Path A-Local, but served over HTTP instead of stdio. This
+allows **remote agents on the network** to connect — not just same-machine subprocesses.
+Useful for fully local setups (Ollama + Docker Postgres) where Supabase Edge Functions
+are not deployed.
+
+```bash
+cerefox mcp --transport http --port 8001
+```
+
+The server binds to `0.0.0.0:8001` and speaks MCP Streamable HTTP. Optional bearer
+token auth via `CEREFOX_API_TOKEN`.
+
+### Claude Code
+
+```bash
+claude mcp add cerefox --transport http http://YOUR_IP:8001/mcp
+```
+
+With auth:
+```bash
+claude mcp add cerefox --transport http http://YOUR_IP:8001/mcp \
+  --header "Authorization: Bearer YOUR_TOKEN"
+```
+
+### Cursor
+
+```json
+{
+  "mcpServers": {
+    "cerefox": {
+      "url": "http://YOUR_IP:8001/mcp",
+      "headers": { "Authorization": "Bearer YOUR_TOKEN" }
+    }
+  }
+}
+```
+
+### Claude Desktop (via supergateway)
+
+```json
+{
+  "mcpServers": {
+    "cerefox": {
+      "command": "npx",
+      "args": ["-y", "supergateway", "--streamableHttp", "http://YOUR_IP:8001/mcp"]
+    }
+  }
+}
+```
+
+---
+
+## JSON REST API (`/api/*`)
+
+### What it is
+
+The FastAPI web app (port 8000) serves JSON endpoints alongside the HTML web UI. These
+are the local equivalents of the Supabase Edge Functions — any HTTP client can call them.
+
+| Endpoint | Method | Equivalent Edge Function |
+|----------|--------|--------------------------|
+| `/api/search` | POST | `cerefox-search` |
+| `/api/ingest` | POST | `cerefox-ingest` |
+| `/api/metadata` | POST | `cerefox-metadata` |
+
+Auth: if `CEREFOX_API_TOKEN` is set, include `Authorization: Bearer <token>` header.
+
+### Search
+
+```bash
+curl -X POST http://localhost:8000/api/search \
+  -H "Content-Type: application/json" \
+  -d '{"query": "knowledge management", "match_count": 5}'
+```
+
+Parameters: `query` (required), `project_name`, `match_count`, `mode` (hybrid/fts/semantic/docs),
+`alpha`, `min_score`, `max_bytes`.
+
+### Ingest
+
+```bash
+curl -X POST http://localhost:8000/api/ingest \
+  -H "Content-Type: application/json" \
+  -d '{"title": "My Note", "content": "# Hello\nContent here", "project_name": "notes"}'
+```
+
+Parameters: `title` (required), `content` (required), `project_name`, `source`, `metadata`,
+`update_if_exists`.
+
+### Metadata
+
+```bash
+curl -X POST http://localhost:8000/api/metadata \
+  -H "Content-Type: application/json" \
+  -d '{}'
+```
+
+### ChatGPT GPT Actions (local)
+
+For local setups, point the GPT Actions OpenAPI schema at your local API instead of
+Supabase Edge Functions. Use the same schema from the "ChatGPT Custom GPT" section below,
+but replace the `servers` URL:
+
+```yaml
+servers:
+  - url: http://YOUR_IP:8000/api
+```
+
+And change the paths to `/search`, `/ingest`, `/metadata` (no `cerefox-` prefix).
+
+---
+
 ## Path B — Supabase Edge Functions (HTTP)
 
 ### What they are
@@ -618,17 +735,12 @@ Use the Cerefox Python client directly for scripted or embedded agents:
 ```python
 from cerefox.config import Settings
 from cerefox.db.client import CerefoxClient
-from cerefox.embeddings.cloud import CloudEmbedder
+from cerefox.embeddings.factory import create_embedder
 from cerefox.retrieval.search import SearchClient
 
-settings = Settings()            # reads from .env
+settings = Settings()                  # reads from .env
 client = CerefoxClient(settings)
-embedder = CloudEmbedder(
-    api_key=settings.get_embedder_api_key(),
-    base_url=settings.get_embedder_base_url(),
-    model=settings.get_embedder_model(),
-    dimensions=settings.get_embedder_dimensions(),
-)
+embedder = create_embedder(settings)   # returns CloudEmbedder or OllamaEmbedder
 sc = SearchClient(client, embedder, settings)
 
 resp = sc.search_docs("what did I write about Rust?", match_count=5)

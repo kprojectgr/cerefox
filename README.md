@@ -21,8 +21,9 @@ The primary use case is **shared memory across AI agents**: knowledge written by
 - **Own your data** — everything lives in a Postgres database you control (Supabase free tier or self-hosted)
 - **Not a note-taking app** — Cerefox is knowledge *infrastructure*, not a replacement for Obsidian, Notion, or Bear; those tools handle authoring, Cerefox handles indexing and agent access
 - **Hybrid search** — full-text + semantic search finds relevant knowledge even with fuzzy or conceptual queries
-- **Any agent, anywhere** — remote MCP via Supabase Edge Functions; ChatGPT via Custom GPT + GPT Actions
-- **Keep it cheap** — Supabase free tier + low-cost cloud embeddings; see `docs/guides/operational-cost.md`
+- **Any agent, anywhere** — remote MCP, local MCP (stdio or HTTP), JSON REST API, ChatGPT via Custom GPT
+- **Run fully local** — Ollama for embeddings + Docker Postgres, zero cloud dependencies
+- **Keep it cheap** — Supabase free tier + low-cost cloud embeddings, or free with Ollama; see `docs/guides/operational-cost.md`
 
 ---
 
@@ -32,9 +33,10 @@ The primary use case is **shared memory across AI agents**: knowledge written by
 |---------|---------|
 | **Hybrid search** | Combines full-text (BM25) + semantic (vector) search with a configurable alpha weight |
 | **Heading-aware chunking** | Greedy section accumulation — H1/H2/H3 sections accumulate until MAX_CHUNK_CHARS; heading breadcrumb preserved per chunk |
-| **Cloud embeddings** | OpenAI `text-embedding-3-small` (768-dim) via API — or swap to Fireworks AI |
+| **Pluggable embeddings** | OpenAI `text-embedding-3-small` (default), Fireworks AI, or **Ollama** (fully local, no API key) |
 | **Remote MCP endpoint** | `cerefox-mcp` Supabase Edge Function — MCP Streamable HTTP; connect Claude Desktop, Claude Code, or Cursor with just a URL and anon key; no Python install needed |
-| **Local MCP server (legacy)** | `cerefox mcp` stdio server — fallback for offline use or development; requires Python + uv + local clone |
+| **Local MCP server** | `cerefox mcp` — stdio (local subprocess) or `--transport http` (network access for remote agents) |
+| **JSON REST API** | `POST /api/search`, `/api/ingest`, `/api/metadata` — programmatic access for any HTTP client (ChatGPT GPT Actions, curl, custom agents) |
 | **Web UI** | FastAPI + Jinja2 + HTMX dashboard for browsing, searching, and ingesting |
 | **Multi-format ingest** | `.md`, `.txt`, `.pdf` (pypdf), `.docx` (python-docx) |
 | **Batch ingest** | `cerefox ingest-dir` recurses directories |
@@ -56,21 +58,15 @@ cd cerefox
 uv sync
 ```
 
-### 2. Set up Supabase (free)
+### 2a. Cloud path — Set up Supabase (free)
 
 1. Sign up at [supabase.com](https://supabase.com) — a GitHub login works fine.
-2. Create a new project. Give it a name (e.g. `cerefox`) and set a database password (store it somewhere safe — you'll need it once).
-3. On the project creation screen leave the defaults:
-   - **Enable Data API** ✅ — required (the Python client uses this)
-   - **Enable automatic RLS** — leave unchecked (single-user app, not needed)
-
-### 3. Configure `.env`
+2. Create a new project. Give it a name (e.g. `cerefox`) and set a database password.
+3. Configure `.env`:
 
 ```bash
 cp .env.example .env
 ```
-
-Open `.env` and fill in these values:
 
 | Variable | Where to find it |
 |---|---|
@@ -79,35 +75,39 @@ Open `.env` and fill in these values:
 | `CEREFOX_DATABASE_URL` | Supabase → Settings → Database → Connection string → **Session pooler** (port 5432) |
 | `OPENAI_API_KEY` | [platform.openai.com/api-keys](https://platform.openai.com/api-keys) |
 
-**`CEREFOX_DATABASE_URL` notes:**
-- Use the **Session pooler** string (port 5432), not the Direct connection or Transaction pooler.
-- The username must include your project ref: `postgres.your-project-ref` — not just `postgres`.
-- Direct connection is IPv6 only on the free tier. If you get `nodename nor servname provided`, you are on IPv4 — use the Session pooler.
-- See `.env.example` for both URL formats with full explanations.
+### 2b. Local path — Docker + Ollama (zero cloud dependencies)
 
-### 4. Deploy the schema
+```bash
+docker compose up -d postgres        # start local Postgres+pgvector
+ollama pull nomic-embed-text         # download the embedding model
+cp .env.example .env
+```
+
+Edit `.env`:
+```env
+CEREFOX_DATABASE_URL=postgresql://cerefox:cerefox@localhost:5432/cerefox
+CEREFOX_EMBEDDER=ollama
+# No OPENAI_API_KEY or Supabase keys needed
+```
+
+### 3. Deploy the schema
 
 ```bash
 uv run python scripts/db_deploy.py
 ```
 
-### 5. Deploy the Edge Functions
+### 4. (Cloud only) Deploy the Edge Functions
 
-Edge Functions handle server-side embedding so AI agents never need a local model. Requires the [Supabase CLI](https://supabase.com/docs/guides/cli).
+Edge Functions handle server-side embedding so AI agents never need a local model. Requires the [Supabase CLI](https://supabase.com/docs/guides/cli). Skip this for local-only setups.
 
 ```bash
 npx supabase functions deploy cerefox-search
 npx supabase functions deploy cerefox-ingest
 npx supabase functions deploy cerefox-mcp
-```
-
-Set your OpenAI key as a Supabase secret (used by the functions at runtime):
-
-```bash
 npx supabase secrets set OPENAI_API_KEY=sk-...your-key...
 ```
 
-### 6. Ingest a document and open the web UI
+### 5. Ingest a document and open the web UI
 
 ```bash
 uv run cerefox ingest my-notes.md --title "My notes"
@@ -174,8 +174,17 @@ Create a Custom GPT and add an Action pointing at the Supabase Edge Functions �
 install, no MCP config, works from both ChatGPT web and desktop. Uses the Supabase anon key
 as Bearer auth.
 
-**Option 3 — Local stdio MCP (legacy fallback)** — requires Python + uv + local repo clone:
+**Option 3 — Local MCP (stdio or HTTP)** — requires Python + uv + local repo clone:
 
+```bash
+# stdio — for same-machine agents (Claude Desktop subprocess)
+cerefox mcp
+
+# HTTP — for remote agents over the network
+cerefox mcp --transport http --port 8001
+```
+
+Claude Desktop (stdio):
 ```json
 {
   "mcpServers": {
@@ -185,6 +194,19 @@ as Bearer auth.
     }
   }
 }
+```
+
+Claude Code (HTTP):
+```bash
+claude mcp add cerefox --transport http http://YOUR_IP:8001/mcp
+```
+
+**Option 4 — JSON REST API** — for any HTTP client:
+
+```bash
+curl -X POST http://localhost:8000/api/search \
+  -H "Content-Type: application/json" \
+  -d '{"query": "my search query", "match_count": 5}'
 ```
 
 Full setup for all options: `docs/guides/connect-agents.md`

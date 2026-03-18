@@ -1,6 +1,10 @@
 # Local Setup Guide
 
-Run the Cerefox web server and database on your own machine using Docker for Postgres+pgvector. Embeddings use the OpenAI API — an `OPENAI_API_KEY` is required even for local setups.
+Run Cerefox entirely on your own machine using Docker for Postgres+pgvector.
+
+Two embedding options:
+- **Ollama** (fully local, no API key, no cloud) — recommended for local-only setups
+- **OpenAI API** (cloud, requires API key) — recommended if you also use Supabase Edge Functions
 
 ---
 
@@ -8,7 +12,7 @@ Run the Cerefox web server and database on your own machine using Docker for Pos
 
 - Docker and Docker Compose
 - Python 3.11+ with `uv` (`pip install uv`)
-- An OpenAI API key (for embeddings — [platform.openai.com/api-keys](https://platform.openai.com/api-keys))
+- **Either** [Ollama](https://ollama.com) installed **or** an OpenAI API key
 
 ---
 
@@ -50,16 +54,26 @@ cp .env.example .env
 
 Edit `.env` for local Docker:
 
-```env
-# Local Postgres (Docker)
-CEREFOX_DATABASE_URL=postgresql://cerefox:cerefox@localhost:5432/cerefox
+**Option A — Ollama (fully local, no API key):**
 
-# For local-only use, Supabase keys are not required.
-# The web UI and CLI will work without them if you skip the Supabase MCP integration.
+```env
+CEREFOX_DATABASE_URL=postgresql://cerefox:cerefox@localhost:5432/cerefox
 CEREFOX_SUPABASE_URL=
 CEREFOX_SUPABASE_KEY=
+CEREFOX_EMBEDDER=ollama
+```
 
-# OpenAI API key for embeddings (text-embedding-3-small)
+Pull the embedding model:
+```bash
+ollama pull nomic-embed-text
+```
+
+**Option B — OpenAI API:**
+
+```env
+CEREFOX_DATABASE_URL=postgresql://cerefox:cerefox@localhost:5432/cerefox
+CEREFOX_SUPABASE_URL=
+CEREFOX_SUPABASE_KEY=
 OPENAI_API_KEY=sk-...
 ```
 
@@ -101,7 +115,7 @@ cerefox ingest my-notes.md --project "personal"
 echo "# Quick Note\n\nThis is a quick note." | cerefox ingest --paste --title "Quick Note"
 ```
 
-Each ingest calls the OpenAI embedding API once per batch of chunks (fast, typically under a second).
+Each ingest calls the embedding API (or local Ollama) once per batch of chunks.
 
 ---
 
@@ -166,6 +180,31 @@ python scripts/db_migrate.py
 ```
 
 This applies incremental migrations without losing data. Always back up first (see `ops-scripts.md`).
+
+---
+
+## Connecting agents (local setup)
+
+For local setups without Supabase Edge Functions, use the local MCP server or JSON API.
+
+**MCP (stdio) — for same-machine agents:**
+```bash
+cerefox mcp
+```
+
+**MCP (HTTP) — for remote agents on the network:**
+```bash
+cerefox mcp --transport http --port 8001
+```
+
+**JSON REST API** — served by the web app on port 8000:
+```bash
+curl -X POST http://localhost:8000/api/search \
+  -H "Content-Type: application/json" \
+  -d '{"query": "my search query"}'
+```
+
+See `connect-agents.md` for full client configuration (Claude Desktop, Claude Code, Cursor, ChatGPT).
 
 ---
 

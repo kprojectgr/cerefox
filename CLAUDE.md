@@ -10,7 +10,7 @@ Single-user, open-source (Apache 2.0), designed to be cheap/free to operate.
 
 - **Language**: Python 3.11+
 - **Database**: PostgreSQL 16+ with pgvector (Supabase free tier or local Docker)
-- **Embeddings**: OpenAI `text-embedding-3-small` (768-dim, cloud API); Fireworks AI as alternative; Edge Functions handle embedding server-side for agents
+- **Embeddings**: OpenAI `text-embedding-3-small` (768-dim, cloud API); Fireworks AI as alternative; Ollama for fully local (nomic-embed-text, 768-dim); Edge Functions handle embedding server-side for agents
 - **Web framework**: FastAPI (API + web UI backend)
 - **Web UI**: Jinja2 templates + HTMX (lightweight, no JS build step)
 - **CLI**: Click
@@ -42,7 +42,9 @@ cerefox/
 │       │   └── converters.py      # PDF/DOCX → MD (future)
 │       ├── embeddings/
 │       │   ├── base.py            # Embedder protocol/interface
-│       │   └── cloud.py           # OpenAI/Fireworks REST API embedder
+│       │   ├── cloud.py           # OpenAI/Fireworks REST API embedder
+│       │   ├── ollama.py          # Ollama local embedder
+│       │   └── factory.py         # create_embedder(settings) factory
 │       ├── ingestion/
 │       │   └── pipeline.py        # Ingest documents → chunks → DB
 │       ├── retrieval/
@@ -51,7 +53,8 @@ cerefox/
 │       │   └── fs_backup.py       # File system / git backup
 │       ├── api/
 │       │   ├── app.py             # FastAPI application
-│       │   └── routes.py          # API endpoints
+│       │   ├── routes.py          # Web UI routes (HTML)
+│       │   └── api_routes.py      # JSON REST API (/api/search, /api/ingest, /api/metadata)
 │       ├── mcp_server.py          # MCP stdio server (cerefox mcp)
 │       └── cli.py                 # CLI entry point
 ├── web/
@@ -86,7 +89,7 @@ cerefox/
 - Config: environment variables with `CEREFOX_` prefix
 
 ### Architecture Principles
-- **Pluggable embedders**: all embedders implement the `Embedder` protocol (see `embeddings/base.py`)
+- **Pluggable embedders**: all embedders implement the `Embedder` protocol (see `embeddings/base.py`); use `create_embedder(settings)` from `embeddings/factory.py` to instantiate
 - **Markdown-first**: all content is converted to markdown before chunking/storage
 - **Fire-and-forget ingestion**: ingestion can be async; failures log errors but don't block
 - **Parameterized limits**: response size limits, chunk sizes, etc. are configurable via settings
@@ -95,7 +98,7 @@ cerefox/
 ### Configuration
 - Use pydantic-settings with `.env` file support
 - All config has sensible defaults for local development
-- Key settings: `CEREFOX_SUPABASE_URL`, `CEREFOX_SUPABASE_KEY`, `OPENAI_API_KEY`, `CEREFOX_EMBEDDER`, `CEREFOX_MAX_RESPONSE_BYTES`
+- Key settings: `CEREFOX_SUPABASE_URL`, `CEREFOX_SUPABASE_KEY`, `OPENAI_API_KEY`, `CEREFOX_EMBEDDER` (`openai`/`fireworks`/`ollama`), `CEREFOX_MAX_RESPONSE_BYTES`, `CEREFOX_API_TOKEN`, `CEREFOX_MCP_HTTP_PORT`
 
 ### Testing
 - **Write tests alongside code, not after** — every module added to `src/cerefox/` gets a corresponding test module in `tests/`
@@ -164,8 +167,10 @@ Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
 2. **768-dim vectors** standardized across all embedders — choose models that output 768 dims or use dimensionality reduction
 3. **JSONB metadata** on both documents and chunks — evolvable without schema changes
 4. **Greedy section accumulation** — sections (H1/H2/H3) are accumulated into a buffer until adding the next would exceed `max_chunk_chars`; no hard heading-level boundaries
-5. **Cloud-only embeddings** (OpenAI / Fireworks) — local models (mpnet, Ollama) removed; they caused platform-specific failures and added install complexity
+5. **Cloud + local embeddings** — OpenAI/Fireworks via cloud REST API; Ollama for fully local operation (no API key, no cloud dependency). Local models requiring torch/onnx (mpnet) remain removed.
 6. **Supabase Edge Functions** (`cerefox-search`, `cerefox-ingest`, `cerefox-mcp`) — embed server-side so agents never need a local embedding model; `cerefox-mcp` is the recommended MCP endpoint for all Claude/Cursor clients (via Streamable HTTP); Claude Desktop uses `supergateway` as a stdio-to-HTTP bridge; `mcp-remote` does NOT work with Supabase (GoTrue OAuth conflict)
+7. **JSON REST API** (`/api/search`, `/api/ingest`, `/api/metadata`) — local equivalents of Edge Functions, served by the FastAPI app; enables fully local operation with external agent access
+8. **MCP HTTP transport** — `cerefox mcp --transport http` exposes MCP Streamable HTTP for remote agents; replaces the need for Edge Functions in local deployments
 
 ## Documentation as Source of Truth
 
