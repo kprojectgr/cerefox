@@ -8,6 +8,7 @@ from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
+from cerefox.api.api_routes import api_router
 from cerefox.api.routes import router
 
 # Resolve paths relative to this file so they work regardless of cwd.
@@ -33,6 +34,7 @@ def create_app() -> FastAPI:
         app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
     app.include_router(router)
+    app.include_router(api_router)
     return app
 
 

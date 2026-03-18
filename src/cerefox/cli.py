@@ -21,7 +21,6 @@ import click
 
 from cerefox.config import Settings
 
-
 # ── Root group ────────────────────────────────────────────────────────────────
 
 
@@ -49,27 +48,14 @@ def _get_client(settings: Settings):
 
 
 def _get_embedder(settings: Settings):
-    """Return the configured CloudEmbedder instance."""
-    import sys  # noqa: PLC0415
+    """Return the configured embedder instance."""
+    from cerefox.embeddings.factory import create_embedder  # noqa: PLC0415
 
-    from cerefox.embeddings.cloud import CloudEmbedder  # noqa: PLC0415
-
-    api_key = settings.get_embedder_api_key()
-    if not api_key:
-        provider = "OPENAI" if settings.embedder == "openai" else "FIREWORKS"
-        click.echo(
-            f"❌  Embedding API key not set.\n"
-            f"    Set CEREFOX_{provider}_API_KEY in your .env file.",
-            err=True,
-        )
+    try:
+        return create_embedder(settings)
+    except ValueError as exc:
+        click.echo(f"❌  {exc}", err=True)
         sys.exit(1)
-
-    return CloudEmbedder(
-        api_key=api_key,
-        base_url=settings.get_embedder_base_url(),
-        model=settings.get_embedder_model(),
-        dimensions=settings.get_embedder_dimensions(),
-    )
 
 
 # ── ingest ────────────────────────────────────────────────────────────────────
@@ -528,26 +514,30 @@ def reindex(batch: int, reindex_all: bool) -> None:
 
 
 @cli.command("mcp")
-def mcp_server() -> None:
-    """Start the Cerefox MCP server (stdio transport, legacy fallback).
-
-    Add to Claude Desktop's claude_desktop_config.json:
+@click.option(
+    "--transport",
+    type=click.Choice(["stdio", "http"], case_sensitive=False),
+    default="stdio",
+    show_default=True,
+    help="Transport protocol. stdio for local subprocess, http for network access.",
+)
+@click.option("--port", default=8001, show_default=True, help="Port for HTTP transport.")
+def mcp_server(transport: str, port: int) -> None:
+    """Start the Cerefox MCP server.
 
     \b
-    {
-      "mcpServers": {
-        "cerefox": {
-          "command": "uv",
-          "args": ["--directory", "/path/to/cerefox", "run", "cerefox", "mcp"]
-        }
-      }
-    }
+    stdio (default) — for local agents launched as a subprocess:
+      cerefox mcp
 
-    Exposes two tools: cerefox_search and cerefox_ingest.
+    \b
+    http — for remote agents over the network:
+      cerefox mcp --transport http --port 8001
+
+    Exposes tools: cerefox_search, cerefox_ingest, cerefox_list_metadata_keys.
     """
     from cerefox.mcp_server import run  # noqa: PLC0415
 
-    run()
+    run(transport=transport, port=port)
 
 
 # ── web ───────────────────────────────────────────────────────────────────────

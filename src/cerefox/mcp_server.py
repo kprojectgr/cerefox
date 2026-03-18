@@ -1,32 +1,18 @@
-"""Cerefox MCP server (local stdio) — legacy fallback.
+"""Cerefox MCP server — local stdio and Streamable HTTP transports.
 
-The **recommended** MCP path is the remote ``cerefox-mcp`` Supabase Edge Function
-(Streamable HTTP). It requires no Python install, no local repo clone, and works
-from Claude Code, Cursor, Claude Desktop (via supergateway), and other remote-
-capable MCP clients.
+Supports two transports:
 
-This local stdio server is kept as a **legacy fallback** for environments where
-a remote connection is not available or practical. It exposes the same
-``cerefox_search``, ``cerefox_ingest``, and ``cerefox_list_metadata_keys``
-tools as the remote Edge Function.
+* **stdio** (default) — for same-machine agents. Claude Desktop, Claude Code,
+  and Cursor can launch it as a subprocess.
+* **http** — for network agents. Exposes MCP Streamable HTTP on a configurable
+  port so remote MCP clients can connect.
 
 Run via::
 
-    cerefox mcp
-
-Claude Desktop config (~/.../claude_desktop_config.json)::
-
-    {
-      "mcpServers": {
-        "cerefox": {
-          "command": "uv",
-          "args": ["--directory", "/path/to/cerefox", "run", "cerefox", "mcp"]
-        }
-      }
-    }
+    cerefox mcp                                  # stdio (default)
+    cerefox mcp --transport http --port 8001     # HTTP
 
 The server reads CEREFOX_* settings from .env (same as the CLI).
-No extra credentials or tokens needed — uses the local Python SDK directly.
 """
 
 from __future__ import annotations
@@ -58,17 +44,12 @@ def _get_deps() -> dict[str, Any]:
 
     from cerefox.config import Settings
     from cerefox.db.client import CerefoxClient
-    from cerefox.embeddings.cloud import CloudEmbedder
+    from cerefox.embeddings.factory import create_embedder
     from cerefox.ingestion.pipeline import IngestionPipeline
 
     settings = Settings()
     client = CerefoxClient(settings)
-    embedder = CloudEmbedder(
-        api_key=settings.get_embedder_api_key(),
-        base_url=settings.get_embedder_base_url(),
-        model=settings.get_embedder_model(),
-        dimensions=settings.get_embedder_dimensions(),
-    )
+    embedder = create_embedder(settings)
     pipeline = IngestionPipeline(client, embedder, settings)
 
     _deps = {
@@ -297,10 +278,10 @@ async def _handle_list_metadata_keys(client: Any) -> list[types.TextContent]:
     return [types.TextContent(type="text", text=json.dumps(keys, indent=2))]
 
 
-# ── Entry point ────────────────────────────────────────────────────────────────
+# ── Entry points ───────────────────────────────────────────────────────────────
 
 
-async def _run() -> None:
+async def _run_stdio() -> None:
     async with mcp.server.stdio.stdio_server() as (read_stream, write_stream):
         await server.run(
             read_stream,
@@ -316,6 +297,51 @@ async def _run() -> None:
         )
 
 
-def run() -> None:
-    """Start the Cerefox MCP server over stdio."""
-    asyncio.run(_run())
+def _create_http_app(token: str = ""):
+    """Build a Starlette app that serves MCP over Streamable HTTP."""
+    from mcp.server.streamable_http import StreamableHTTPServerTransport
+    from starlette.applications import Starlette
+    from starlette.requests import Request
+    from starlette.responses import JSONResponse, Response
+    from starlette.routing import Route
+
+    transport = StreamableHTTPServerTransport(
+        mcp_endpoint="/mcp",
+        is_json=True,
+    )
+
+    async def handle_mcp(request: Request) -> Response:
+        # Optional bearer token auth
+        if token:
+            auth = request.headers.get("authorization", "")
+            if auth != f"Bearer {token}":
+                return JSONResponse({"error": "Unauthorized"}, status_code=401)
+        return await transport.handle_request(request)
+
+    async def on_startup() -> None:
+        await transport.connect(server)
+
+    return Starlette(
+        routes=[Route("/mcp", handle_mcp, methods=["POST", "GET"])],
+        on_startup=[on_startup],
+    )
+
+
+def run(transport: str = "stdio", port: int = 8001) -> None:
+    """Start the Cerefox MCP server.
+
+    Args:
+        transport: ``"stdio"`` (default) or ``"http"``.
+        port: Port for HTTP transport (ignored for stdio).
+    """
+    if transport == "http":
+        import uvicorn
+
+        from cerefox.config import Settings
+
+        settings = Settings()
+        app = _create_http_app(token=settings.api_token)
+        log.info("Starting MCP HTTP server on port %d", port)
+        uvicorn.run(app, host="0.0.0.0", port=port)
+    else:
+        asyncio.run(_run_stdio())

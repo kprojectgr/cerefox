@@ -60,5 +60,6 @@ markers = [
     "integration: marks tests that require a live Supabase/Postgres connection (skipped by default)",
     "e2e: end-to-end tests against a live Supabase instance (skipped by default, run with -m e2e)",
     "ui: UI end-to-end tests via Playwright (skipped by default, run with -m ui)",
+    "local: local e2e tests requiring Ollama + local Postgres (skipped by default, run with -m local)",
 ]
-addopts = "-m 'not integration and not e2e and not ui'"
+addopts = "-m 'not integration and not e2e and not ui and not local'"
