@@ -28,12 +28,10 @@ class Settings(BaseSettings):
     database_url: str = ""
 
     # ── Embeddings ────────────────────────────────────────────────────────────
-    # Cloud-based embedders only. Local models (mpnet, Ollama) are no longer
-    # supported — they create installation complexity and fail on some platforms.
-    #
     # "openai"    — OpenAI text-embedding-3-small (default, low per-token cost)
     # "fireworks" — Fireworks AI nomic-embed-text-v1.5 (OpenAI-compatible API)
-    embedder: Literal["openai", "fireworks"] = "openai"
+    # "ollama"    — Local Ollama server (nomic-embed-text, no API key needed)
+    embedder: Literal["openai", "fireworks", "ollama"] = "openai"
 
     # OpenAI API settings (used when embedder="openai")
     # Accepts CEREFOX_OPENAI_API_KEY or the standard OPENAI_API_KEY env var.
@@ -50,6 +48,11 @@ class Settings(BaseSettings):
     fireworks_api_key: str = ""
     fireworks_base_url: str = "https://api.fireworks.ai/inference/v1"
     fireworks_embedding_model: str = "nomic-ai/nomic-embed-text-v1.5"
+
+    # Ollama settings (used when embedder="ollama")
+    # Local embedding — no API key needed. Requires Ollama running.
+    ollama_base_url: str = "http://localhost:11434"
+    ollama_embedding_model: str = "nomic-embed-text"
 
     # ── Chunking ──────────────────────────────────────────────────────────────
     max_chunk_chars: int = 4000
@@ -75,6 +78,14 @@ class Settings(BaseSettings):
 
     # ── Storage ───────────────────────────────────────────────────────────────
     backup_dir: str = "./backups"
+
+    # ── API ─────────────────────────────────────────────────────────────────
+    # Optional bearer token for /api/* and MCP HTTP endpoints.
+    # If empty, no auth is required (suitable for localhost-only use).
+    api_token: str = ""
+
+    # Port for MCP Streamable HTTP transport (cerefox mcp --transport http)
+    mcp_http_port: int = 8001
 
     # ── Logging ───────────────────────────────────────────────────────────────
     log_level: str = "INFO"

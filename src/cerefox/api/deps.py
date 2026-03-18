@@ -8,7 +8,6 @@ from functools import lru_cache
 from cerefox.config import Settings
 from cerefox.db.client import CerefoxClient
 from cerefox.embeddings.base import Embedder
-from cerefox.embeddings.cloud import CloudEmbedder
 
 logger = logging.getLogger(__name__)
 
@@ -25,21 +24,12 @@ def _cached_client() -> CerefoxClient:
 
 @lru_cache(maxsize=1)
 def _cached_embedder() -> Embedder | None:
+    """Return the configured embedder, or None if configuration is incomplete."""
     settings = _cached_settings()
     try:
-        api_key = settings.get_embedder_api_key()
-        if not api_key:
-            logger.warning(
-                "Embedding API key not set (CEREFOX_OPENAI_API_KEY or "
-                "CEREFOX_FIREWORKS_API_KEY). Semantic search will be unavailable."
-            )
-            return None
-        return CloudEmbedder(
-            api_key=api_key,
-            base_url=settings.get_embedder_base_url(),
-            model=settings.get_embedder_model(),
-            dimensions=settings.get_embedder_dimensions(),
-        )
+        from cerefox.embeddings.factory import create_embedder
+
+        return create_embedder(settings)
     except Exception as exc:
         logger.warning("Embedder unavailable: %s", exc)
         return None
