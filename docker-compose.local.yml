@@ -1,0 +1,105 @@
+# ── Cerefox fully local stack (Ollama + Postgres + PostgREST) ─────────────────
+#
+# Zero cloud dependencies. Ollama runs on a separate host (or localhost).
+# PostgREST provides the REST API that supabase-py talks to.
+#
+# Usage:
+#   1. Copy .env.local to .env and adjust CEREFOX_OLLAMA_BASE_URL if needed
+#   2. docker compose -f docker-compose.local.yml up -d
+#   3. docker compose -f docker-compose.local.yml exec cerefox python scripts/db_deploy.py --reset
+#      (type 'yes' — first time only)
+#   4. Open http://localhost:9100
+#
+# Ollama must be running separately with nomic-embed-text pulled:
+#   ollama pull nomic-embed-text
+
+services:
+
+  # ── Postgres with pgvector ─────────────────────────────────────────────────
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: cerefox-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-cerefox}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-cerefox}
+      POSTGRES_DB: ${POSTGRES_DB:-cerefox}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U cerefox -d cerefox"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── PostgREST (REST API over Postgres, required by supabase-py) ────────────
+  postgrest:
+    image: postgrest/postgrest:v12.2.3
+    container_name: cerefox-postgrest
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      PGRST_DB_URI: postgres://${POSTGRES_USER:-cerefox}:${POSTGRES_PASSWORD:-cerefox}@postgres:5432/${POSTGRES_DB:-cerefox}
+      PGRST_DB_SCHEMAS: public
+      PGRST_DB_ANON_ROLE: ${POSTGRES_USER:-cerefox}
+      PGRST_JWT_SECRET: ${PGRST_JWT_SECRET}
+      PGRST_DB_EXTRA_SEARCH_PATH: public,extensions
+  # ── Cerefox API + Web UI ───────────────────────────────────────────────────
+  cerefox:
+    build: .
+    container_name: cerefox-app
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      postgrest:
+        condition: service_started
+    environment:
+      CEREFOX_DATABASE_URL: postgresql://${POSTGRES_USER:-cerefox}:${POSTGRES_PASSWORD:-cerefox}@postgres:5432/${POSTGRES_DB:-cerefox}
+      CEREFOX_SUPABASE_URL: http://postgrest:3000
+      CEREFOX_SUPABASE_KEY: ${CEREFOX_SUPABASE_KEY}
+      CEREFOX_EMBEDDER: ollama
+      CEREFOX_OLLAMA_BASE_URL: ${CEREFOX_OLLAMA_BASE_URL}
+      CEREFOX_OLLAMA_EMBEDDING_MODEL: ${CEREFOX_OLLAMA_EMBEDDING_MODEL:-nomic-embed-text}
+      CEREFOX_API_TOKEN: ${CEREFOX_API_TOKEN:-}
+      CEREFOX_MAX_CHUNK_CHARS: ${CEREFOX_MAX_CHUNK_CHARS:-4000}
+      CEREFOX_MAX_RESPONSE_BYTES: ${CEREFOX_MAX_RESPONSE_BYTES:-65000}
+      CEREFOX_BACKUP_DIR: /data/backups
+    volumes:
+      - cerefox_data:/data
+    ports:
+      - "9100:8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/')"]
+      interval: 30s
+      timeout: 10s
+      start_period: 30s
+      retries: 3
+
+  # ── MCP HTTP server (for remote agents) ────────────────────────────────────
+  cerefox-mcp:
+    build: .
+    container_name: cerefox-mcp
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      postgrest:
+        condition: service_started
+    environment:
+      CEREFOX_DATABASE_URL: postgresql://${POSTGRES_USER:-cerefox}:${POSTGRES_PASSWORD:-cerefox}@postgres:5432/${POSTGRES_DB:-cerefox}
+      CEREFOX_SUPABASE_URL: http://postgrest:3000
+      CEREFOX_SUPABASE_KEY: ${CEREFOX_SUPABASE_KEY}
+      CEREFOX_EMBEDDER: ollama
+      CEREFOX_OLLAMA_BASE_URL: ${CEREFOX_OLLAMA_BASE_URL}
+      CEREFOX_OLLAMA_EMBEDDING_MODEL: ${CEREFOX_OLLAMA_EMBEDDING_MODEL:-nomic-embed-text}
+      CEREFOX_API_TOKEN: ${CEREFOX_API_TOKEN:-}
+    ports:
+      - "9101:8001"
+    command: ["python", "-m", "cerefox.cli", "mcp", "--transport", "http", "--port", "8001"]
+
+volumes:
+  postgres_data:
+  cerefox_data:

@@ -42,6 +42,12 @@ class CerefoxClient:
                 self._settings.supabase_url,
                 self._settings.supabase_key,
             )
+            # Local PostgREST serves at root, not /rest/v1.
+            # Override rest_url so supabase-py hits the right path.
+            if self._settings.supabase_url and ".supabase.co" not in self._settings.supabase_url:
+                from yarl import URL  # noqa: PLC0415
+
+                self._client.rest_url = URL(self._settings.supabase_url.rstrip("/") + "/")
         return self._client
 
     def rpc(self, function_name: str, params: dict[str, Any]) -> list[dict[str, Any]]:
