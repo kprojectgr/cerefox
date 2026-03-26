@@ -1,17 +1,25 @@
 # ── Cerefox fully local stack (Ollama + Postgres + PostgREST) ─────────────────
 #
 # Zero cloud dependencies. Ollama runs on a separate host (or localhost).
-# PostgREST provides the REST API that supabase-py talks to.
+# PostgREST provides the REST API that supabase-py expects.
 #
-# Usage:
-#   1. Copy .env.local to .env and adjust CEREFOX_OLLAMA_BASE_URL if needed
-#   2. docker compose -f docker-compose.local.yml up -d
-#   3. docker compose -f docker-compose.local.yml exec cerefox python scripts/db_deploy.py --reset
-#      (type 'yes' — first time only)
-#   4. Open http://localhost:9100
+# Prerequisites:
+#   - Docker / Podman with Compose
+#   - Ollama running with nomic-embed-text pulled: ollama pull nomic-embed-text
 #
-# Ollama must be running separately with nomic-embed-text pulled:
-#   ollama pull nomic-embed-text
+# Quick start:
+#   cp .env.local.example .env           # edit CEREFOX_OLLAMA_BASE_URL if Ollama is remote
+#   docker compose -f docker-compose.local.yml up -d --build
+#   docker compose -f docker-compose.local.yml exec cerefox python scripts/db_deploy.py --reset
+#   # type 'yes' — first time only, creates all tables and functions
+#
+# Services:
+#   Web UI + JSON API : http://localhost:9100
+#   MCP HTTP (agents) : http://localhost:9101/mcp
+#
+# Stop:
+#   docker compose -f docker-compose.local.yml down        # keep data
+#   docker compose -f docker-compose.local.yml down -v     # delete everything
 
 services:
 

@@ -1,217 +1,201 @@
 # Local Setup Guide
 
-Run Cerefox entirely on your own machine using Docker for Postgres+pgvector.
+Run Cerefox entirely on your own machine — zero cloud dependencies.
 
-Two embedding options:
-- **Ollama** (fully local, no API key, no cloud) — recommended for local-only setups
-- **OpenAI API** (cloud, requires API key) — recommended if you also use Supabase Edge Functions
+The local stack uses:
+- **Postgres + pgvector** (Docker) for storage and vector search
+- **PostgREST** (Docker) as the REST API layer (required by supabase-py)
+- **Ollama** for embeddings (no API key needed)
+- **Cerefox** app + MCP HTTP server (Docker)
 
 ---
 
 ## Prerequisites
 
-- Docker and Docker Compose
-- Python 3.11+ with `uv` (`pip install uv`)
-- **Either** [Ollama](https://ollama.com) installed **or** an OpenAI API key
+- Docker / Podman with Compose
+- [Ollama](https://ollama.com) installed and running (can be on the same machine or a remote host)
 
 ---
 
-## Step 1 — Clone and install
+## Quick Start (Docker Compose)
 
 ```bash
-git clone https://github.com/yourname/cerefox.git
+# 1. Clone the repo
+git clone https://github.com/kprojectgr/cerefox.git
 cd cerefox
-uv sync
-```
 
----
-
-## Step 2 — Start Postgres with pgvector
-
-The included `docker-compose.yml` spins up a Postgres 16 instance with the pgvector extension pre-installed:
-
-```bash
-docker compose up -d postgres
-```
-
-Default connection details (overridable in `.env`):
-
-| Setting | Default |
-|---------|---------|
-| Host | `localhost` |
-| Port | `5432` |
-| User | `cerefox` |
-| Password | `cerefox` |
-| Database | `cerefox` |
-
----
-
-## Step 3 — Create a `.env` file
-
-```bash
-cp .env.example .env
-```
-
-Edit `.env` for local Docker:
-
-**Option A — Ollama (fully local, no API key):**
-
-```env
-CEREFOX_DATABASE_URL=postgresql://cerefox:cerefox@localhost:5432/cerefox
-CEREFOX_SUPABASE_URL=
-CEREFOX_SUPABASE_KEY=
-CEREFOX_EMBEDDER=ollama
-```
-
-Pull the embedding model:
-```bash
+# 2. Pull the embedding model on your Ollama host
 ollama pull nomic-embed-text
+
+# 3. Create .env from the local template
+cp .env.local.example .env
+# Edit .env — set CEREFOX_OLLAMA_BASE_URL if Ollama is on a different machine
+#   e.g. CEREFOX_OLLAMA_BASE_URL=http://192.168.0.8:11434
+
+# 4. Generate the JWT for PostgREST auth
+python scripts/generate_jwt.py
+# Copy the output into .env as CEREFOX_SUPABASE_KEY=...
+
+# 5. Build and start everything
+docker compose -f docker-compose.local.yml up -d --build
+
+# 6. Deploy the database schema (first time only)
+docker compose -f docker-compose.local.yml exec cerefox python scripts/db_deploy.py --reset
+# Type 'yes' when prompted
+
+# 7. Open the web UI
+# http://localhost:9100
 ```
 
-**Option B — OpenAI API:**
+That's it. You have:
 
-```env
-CEREFOX_DATABASE_URL=postgresql://cerefox:cerefox@localhost:5432/cerefox
-CEREFOX_SUPABASE_URL=
-CEREFOX_SUPABASE_KEY=
-OPENAI_API_KEY=sk-...
-```
+| Service | URL | What it does |
+|---------|-----|-------------|
+| Web UI + JSON API | `http://localhost:9100` | Browse, search, ingest documents |
+| MCP HTTP (agents) | `http://localhost:9101/mcp` | Remote MCP for Claude Code, Cursor, etc. |
 
 ---
 
-## Step 4 — Deploy the schema
+## What's in the Stack
 
-```bash
-python scripts/db_deploy.py
-```
+`docker-compose.local.yml` runs 4 containers:
 
-This creates all tables, indexes, and RPC functions. Run with `--dry-run` to preview SQL without executing.
+| Container | Image | Purpose |
+|-----------|-------|---------|
+| `cerefox-postgres` | `pgvector/pgvector:pg16` | Database with vector extension |
+| `cerefox-postgrest` | `postgrest/postgrest:v12` | REST API over Postgres (supabase-py talks to this) |
+| `cerefox-app` | built from `Dockerfile` | Web UI + JSON API (port 9100) |
+| `cerefox-mcp` | built from `Dockerfile` | MCP Streamable HTTP server (port 9101) |
 
-To start fresh:
-
-```bash
-python scripts/db_deploy.py --reset   # drops all cerefox_ tables first
-```
-
----
-
-## Step 5 — Verify the setup
-
-```bash
-python scripts/db_status.py
-```
-
-You should see all tables (cerefox_documents, cerefox_chunks, cerefox_projects) and RPC functions listed as ✓.
+All secrets are in `.env` (gitignored). See `.env.local.example` for all variables.
 
 ---
 
-## Step 6 — Ingest your first document
+## Configuration
 
-```bash
-# Ingest a markdown file
-cerefox ingest my-notes.md --project "personal"
+Edit `.env` to change settings. Key variables:
 
-# Or paste content from stdin
-echo "# Quick Note\n\nThis is a quick note." | cerefox ingest --paste --title "Quick Note"
-```
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `CEREFOX_OLLAMA_BASE_URL` | `http://localhost:11434` | Ollama server URL. Change if Ollama is on another machine. |
+| `CEREFOX_OLLAMA_EMBEDDING_MODEL` | `nomic-embed-text` | Must output 768-dim vectors. |
+| `CEREFOX_API_TOKEN` | (empty) | If set, `/api/*` and MCP HTTP require `Authorization: Bearer <token>`. |
+| `POSTGRES_PASSWORD` | `cerefox` | Change for non-localhost deployments. |
+| `PGRST_JWT_SECRET` | (see example) | JWT secret for PostgREST. Must be 32+ chars. |
+| `CEREFOX_SUPABASE_KEY` | (generated) | JWT token. Run `python scripts/generate_jwt.py` to create. |
 
-Each ingest calls the embedding API (or local Ollama) once per batch of chunks.
-
----
-
-## Step 7 — Start the web UI
-
-```bash
-cerefox web
-```
-
-Open [http://localhost:8000](http://localhost:8000) in your browser.
-
-For development with auto-reload:
-
-```bash
-cerefox web --reload
-```
+See `configuration.md` for the full reference.
 
 ---
 
-## Step 8 — Search from the CLI
+## Ingesting Documents
 
+Via the web UI at `http://localhost:9100` — paste content or upload files.
+
+Via the JSON API:
 ```bash
-# Hybrid search (recommended)
-cerefox search "what did I write about project planning?"
-
-# Keyword-only search
-cerefox search "meeting notes" --mode fts
-
-# Semantic search
-cerefox search "ideas about creativity" --mode semantic
-```
-
----
-
-## Running everything at once
-
-The `docker-compose.yml` also includes a `cerefox` service that runs the web UI:
-
-```bash
-docker compose up -d
-```
-
-Web UI will be at [http://localhost:8000](http://localhost:8000).
-
----
-
-## Stopping services
-
-```bash
-docker compose down          # stop, keep data
-docker compose down -v       # stop and delete database volume
-```
-
----
-
-## Updating the schema
-
-When a new version of Cerefox introduces schema changes, run:
-
-```bash
-python scripts/db_migrate.py
-```
-
-This applies incremental migrations without losing data. Always back up first (see `ops-scripts.md`).
-
----
-
-## Connecting agents (local setup)
-
-For local setups without Supabase Edge Functions, use the local MCP server or JSON API.
-
-**MCP (stdio) — for same-machine agents:**
-```bash
-cerefox mcp
-```
-
-**MCP (HTTP) — for remote agents on the network:**
-```bash
-cerefox mcp --transport http --port 8001
-```
-
-**JSON REST API** — served by the web app on port 8000:
-```bash
-curl -X POST http://localhost:8000/api/search \
+curl -X POST http://localhost:9100/api/v1/ingest \
   -H "Content-Type: application/json" \
-  -d '{"query": "my search query"}'
+  -d '{"title": "My Note", "content": "# Hello\nSome content here", "project_name": "notes"}'
 ```
 
-See `connect-agents.md` for full client configuration (Claude Desktop, Claude Code, Cursor, ChatGPT).
+---
+
+## Searching
+
+Via the web UI search page.
+
+Via the JSON API:
+```bash
+curl -X POST http://localhost:9100/api/v1/search \
+  -H "Content-Type: application/json" \
+  -d '{"query": "my search query", "match_count": 5}'
+```
+
+---
+
+## Connecting AI Agents
+
+### MCP HTTP (Claude Code, Cursor)
+
+The MCP server is already running at `http://localhost:9101/mcp`.
+
+Claude Code:
+```bash
+claude mcp add cerefox --transport http http://YOUR_IP:9101/mcp
+```
+
+Cursor (`mcp.json`):
+```json
+{
+  "mcpServers": {
+    "cerefox": {
+      "url": "http://YOUR_IP:9101/mcp"
+    }
+  }
+}
+```
+
+Claude Desktop (via supergateway):
+```json
+{
+  "mcpServers": {
+    "cerefox": {
+      "command": "npx",
+      "args": ["-y", "supergateway", "--streamableHttp", "http://YOUR_IP:9101/mcp"]
+    }
+  }
+}
+```
+
+See `connect-agents.md` for all client configurations.
+
+---
+
+## Stopping and Resetting
+
+```bash
+# Stop (keep data)
+docker compose -f docker-compose.local.yml down
+
+# Stop and delete all data (database, backups)
+docker compose -f docker-compose.local.yml down -v
+
+# View logs
+docker compose -f docker-compose.local.yml logs -f cerefox
+docker compose -f docker-compose.local.yml logs -f cerefox-postgrest
+```
+
+---
+
+## Updating the Schema
+
+When a new version introduces schema changes:
+
+```bash
+docker compose -f docker-compose.local.yml exec cerefox python scripts/db_migrate.py
+```
+
+Always back up first (see `ops-scripts.md`).
 
 ---
 
 ## Troubleshooting
 
-**pgvector extension not found**
-Make sure you're using the `pgvector/pgvector:pg16` Docker image (included in `docker-compose.yml`). Raw Postgres images do not include pgvector.
-
 **"Supabase is not configured" error**
-The CLI and web UI show this error if `CEREFOX_SUPABASE_URL` / `CEREFOX_SUPABASE_KEY` are empty. For local Docker setups, the app uses the direct Postgres URL (`CEREFOX_DATABASE_URL`) for schema deployment but the Supabase client for queries. Set up a local Supabase instance or use the hosted free tier (see `setup-supabase.md`).
+Your `.env` is missing `CEREFOX_SUPABASE_KEY` or it doesn't match `PGRST_JWT_SECRET`. Regenerate the JWT — see `.env.local.example` for instructions.
+
+**"JWSInvalidSignature" error**
+The JWT in `CEREFOX_SUPABASE_KEY` doesn't match `PGRST_JWT_SECRET`. Regenerate it.
+
+**PostgREST 404 or empty responses**
+Run the schema deploy: `docker compose -f docker-compose.local.yml exec cerefox python scripts/db_deploy.py --reset`
+
+**Port conflicts**
+Edit the `ports:` mappings in `docker-compose.local.yml`. Only the host ports (left side of `:`) need to be unique.
+
+**Ollama connection refused**
+Check that Ollama is running and reachable from the Docker network. If Ollama is on the host machine, use `http://host.docker.internal:11434` (macOS/Windows) or your machine's LAN IP (Linux).
+
+**pgvector extension not found**
+Make sure you're using the `pgvector/pgvector:pg16` Docker image. Raw Postgres images don't include pgvector.
